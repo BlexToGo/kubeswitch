@@ -210,7 +210,7 @@ func (s *AzureStore) GetContextPrefix(path string) string {
 	// the GKE store encodes the path with semantic information
 	// <project-name>--<location>--<cluster-name>
 	// just use this semantic information as a prefix & remove the double dashes
-	return strings.ReplaceAll(path, "--", "-")
+	return strings.ReplaceAll(strings.TrimPrefix(path, "az_"), "--", "-")
 }
 
 // IsInitialized checks if the store has been initialized already

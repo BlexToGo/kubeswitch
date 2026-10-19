@@ -302,7 +302,7 @@ func (s *GKEStore) GetKubeconfigForPath(path string, _ map[string]string) ([]byt
 	}
 
 	// context name does not include the location or the account as this information is already included in the path (different to gcloud)
-	contextName := fmt.Sprintf("gke_%s", cluster.Name)
+	contextName := cluster.Name
 
 	if cluster.MasterAuth == nil {
 		return nil, fmt.Errorf("no authentication information found for GKE cluster with name %q in project with ID %q", clusterName, projectID)

@@ -141,7 +141,7 @@ func (s *EKSStore) GetContextPrefix(path string) string {
 		return ""
 	}
 
-	return strings.ReplaceAll(path, "--", "-")
+	return strings.ReplaceAll(strings.TrimPrefix(path, "eks_"), "--", "-")
 }
 
 func (s *EKSStore) VerifyKubeconfigPaths() error {
@@ -226,7 +226,7 @@ func (s *EKSStore) GetKubeconfigForPath(path string, _ map[string]string) ([]byt
 	}
 
 	// context name does not include the location or the account as this information is already included in the path (different to gcloud)
-	contextName := fmt.Sprintf("eks_%s", *cluster.Name)
+	contextName := *cluster.Name
 
 	// need to provide a CA certificate in the kubeconfig (if not using insecure configuration)
 	if cluster.CertificateAuthority == nil || cluster.CertificateAuthority.Data == nil {
