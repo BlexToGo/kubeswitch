@@ -89,10 +89,12 @@ type EKSStore struct {
 }
 
 type GKEStore struct {
-	Logger          *logrus.Entry
-	KubeconfigStore types.KubeconfigStore
-	GkeClient       *gkev1.Service
-	Config          *types.StoreConfigGKE
+	// DiscoveredClustersMutex guards DiscoveredClusters, which is written concurrently during the search
+	DiscoveredClustersMutex sync.RWMutex
+	Logger                  *logrus.Entry
+	KubeconfigStore         types.KubeconfigStore
+	GkeClient               *gkev1.Service
+	Config                  *types.StoreConfigGKE
 	// DiscoveredClusters maps the kubeconfig path (gke--project-name--clusterName) -> cluster
 	// This is a cache for the clusters discovered during the initial search for kubeconfig paths
 	// when not using a search index

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -169,10 +170,12 @@ func (s *GKEStore) InitializeGKEStore() error {
 	return nil
 }
 
-func (s *GKEStore) StartSearch(channel chan storetypes.SearchResult) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+const (
+	gkeListClustersTimeout     = 30 * time.Second
+	gkeListClustersConcurrency = 10
+)
 
+func (s *GKEStore) StartSearch(channel chan storetypes.SearchResult) {
 	if err := s.InitializeGKEStore(); err != nil {
 		err := fmt.Errorf("failed to initialize store: %w", err)
 		channel <- storetypes.SearchResult{
@@ -181,29 +184,48 @@ func (s *GKEStore) StartSearch(channel chan storetypes.SearchResult) {
 		return
 	}
 
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, gkeListClustersConcurrency)
+
 	for projectName, projectId := range s.ProjectNameToID {
-		resp, err := s.GkeClient.Projects.Zones.Clusters.List(projectId, "-").Context(ctx).Do()
-		if err != nil {
-			channel <- storetypes.SearchResult{
-				Error: fmt.Errorf("failed to list GKE clusters for project with ID %q: %w", projectId, err),
-			}
-			continue
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(projectName, projectId string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			s.searchProject(projectName, projectId, channel)
+		}(projectName, projectId)
+	}
+
+	wg.Wait()
+}
+
+func (s *GKEStore) searchProject(projectName, projectId string, channel chan storetypes.SearchResult) {
+	ctx, cancel := context.WithTimeout(context.Background(), gkeListClustersTimeout)
+	defer cancel()
+
+	resp, err := s.GkeClient.Projects.Zones.Clusters.List(projectId, "-").Context(ctx).Do()
+	if err != nil {
+		channel <- storetypes.SearchResult{
+			Error: fmt.Errorf("failed to list GKE clusters for project with ID %q: %w", projectId, err),
 		}
+		return
+	}
 
-		// for every GKE cluster in the project
-		for _, f := range resp.Clusters {
-			// kubeconfig path used to uniquely identify this cluster
-			// gke_<project-name>--<zone>--<gke-cluster-name>
+	// for every GKE cluster in the project
+	for _, f := range resp.Clusters {
+		// kubeconfig path used to uniquely identify this cluster
+		// gke_<project-name>--<zone>--<gke-cluster-name>
+		kubeconfigPath := fmt.Sprintf("gke_%s--%s--%s", projectName, f.Location, f.Name)
 
-			kubeconfigPath := fmt.Sprintf("gke_%s--%s--%s", projectName, f.Location, f.Name)
+		// cache for when getting the kubeconfig for the unique path later
+		s.DiscoveredClustersMutex.Lock()
+		s.DiscoveredClusters[kubeconfigPath] = f
+		s.DiscoveredClustersMutex.Unlock()
 
-			// cache for when getting the kubeconfig for the unique path later
-			s.DiscoveredClusters[kubeconfigPath] = f
-
-			channel <- storetypes.SearchResult{
-				KubeconfigPath: kubeconfigPath,
-				Error:          nil,
-			}
+		channel <- storetypes.SearchResult{
+			KubeconfigPath: kubeconfigPath,
+			Error:          nil,
 		}
 	}
 }
@@ -262,7 +284,9 @@ func (s *GKEStore) GetKubeconfigForPath(path string, _ map[string]string) ([]byt
 
 	projectID := s.ProjectNameToID[strings.TrimPrefix(projectName, "gke_")]
 
+	s.DiscoveredClustersMutex.RLock()
 	cluster := s.DiscoveredClusters[path]
+	s.DiscoveredClustersMutex.RUnlock()
 
 	// cluster has not been discovered from the GCP API yet
 	// this is the case when a search index is used
